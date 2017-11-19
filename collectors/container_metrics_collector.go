@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"strconv"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -19,6 +20,7 @@ type ContainerMetricsCollector struct {
 	memoryBytesQuotaMetric *prometheus.GaugeVec
 	diskBytesQuotaMetric   *prometheus.GaugeVec
 	appinfo                map[string]cfinstanceinfoapi.AppInfo
+	amutex		       *sync.RWMutex
 }
 
 func NewContainerMetricsCollector(
@@ -26,6 +28,7 @@ func NewContainerMetricsCollector(
 	environment string,
 	metricsStore *metrics.Store,
 	appinfo map[string]cfinstanceinfoapi.AppInfo,
+	amutex *sync.RWMutex,
 ) *ContainerMetricsCollector {
 	cpuPercentageMetric := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -91,11 +94,14 @@ func NewContainerMetricsCollector(
 		diskBytesMetric:        diskBytesMetric,
 		memoryBytesQuotaMetric: memoryBytesQuotaMetric,
 		diskBytesQuotaMetric:   diskBytesQuotaMetric,
-		appinfo:                    appinfo,
+		appinfo:                appinfo,
+		amutex: 		amutex,
 	}
 }
 
 func (c ContainerMetricsCollector) Collect(ch chan<- prometheus.Metric) {
+	c.amutex.Lock()
+
 	c.cpuPercentageMetric.Reset()
 	c.memoryBytesMetric.Reset()
 	c.diskBytesMetric.Reset()
@@ -103,57 +109,63 @@ func (c ContainerMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 	c.diskBytesQuotaMetric.Reset()
 
 	for _, containerMetric := range c.metricsStore.GetContainerMetrics() {
+		Name := c.appinfo[containerMetric.ApplicationId].Name
+		Space := c.appinfo[containerMetric.ApplicationId].Space
+		Org := c.appinfo[containerMetric.ApplicationId].Org
+
 		c.cpuPercentageMetric.WithLabelValues(
 			containerMetric.IP,
 			containerMetric.ApplicationId,
 			strconv.Itoa(int(containerMetric.InstanceIndex)),
-			c.appinfo[containerMetric.ApplicationId].Name,
-                        c.appinfo[containerMetric.ApplicationId].Space,
-                        c.appinfo[containerMetric.ApplicationId].Org,
+			Name,
+                        Space,
+                        Org,
 		).Set(containerMetric.CpuPercentage)
 
 		c.memoryBytesMetric.WithLabelValues(
 			containerMetric.IP,
 			containerMetric.ApplicationId,
 			strconv.Itoa(int(containerMetric.InstanceIndex)),
-			c.appinfo[containerMetric.ApplicationId].Name,
-                        c.appinfo[containerMetric.ApplicationId].Space,
-                        c.appinfo[containerMetric.ApplicationId].Org,
+			Name,
+                        Space,
+                        Org,
 		).Set(float64(containerMetric.MemoryBytes))
-
+		
 		c.diskBytesMetric.WithLabelValues(
 			containerMetric.IP,
 			containerMetric.ApplicationId,
 			strconv.Itoa(int(containerMetric.InstanceIndex)),
-			c.appinfo[containerMetric.ApplicationId].Name,
-                        c.appinfo[containerMetric.ApplicationId].Space,
-                        c.appinfo[containerMetric.ApplicationId].Org,
+			Name,
+                        Space,
+                        Org,
 		).Set(float64(containerMetric.DiskBytes))
 
 		c.memoryBytesQuotaMetric.WithLabelValues(
 			containerMetric.IP,
 			containerMetric.ApplicationId,
 			strconv.Itoa(int(containerMetric.InstanceIndex)),
-			c.appinfo[containerMetric.ApplicationId].Name,
-                        c.appinfo[containerMetric.ApplicationId].Space,
-                        c.appinfo[containerMetric.ApplicationId].Org,
+			Name,
+                        Space,
+                        Org,
 		).Set(float64(containerMetric.MemoryBytesQuota))
 
 		c.diskBytesQuotaMetric.WithLabelValues(
 			containerMetric.IP,
 			containerMetric.ApplicationId,
 			strconv.Itoa(int(containerMetric.InstanceIndex)),
-			c.appinfo[containerMetric.ApplicationId].Name,
-                        c.appinfo[containerMetric.ApplicationId].Space,
-                        c.appinfo[containerMetric.ApplicationId].Org,
+			Name,
+                        Space,
+                        Org,
 		).Set(float64(containerMetric.DiskBytesQuota))
 	}
-
+	
 	c.cpuPercentageMetric.Collect(ch)
 	c.memoryBytesMetric.Collect(ch)
 	c.diskBytesMetric.Collect(ch)
 	c.memoryBytesQuotaMetric.Collect(ch)
 	c.diskBytesQuotaMetric.Collect(ch)
+
+	c.amutex.Unlock()
 }
 
 func (c ContainerMetricsCollector) Describe(ch chan<- *prometheus.Desc) {

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
@@ -283,6 +284,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	appmap := make(map[string]cfinstanceinfoapi.AppInfo)
+        amutex := &sync.RWMutex{}
+
 	metricsStore := metrics.NewStore(*dopplerMetricExpiration, *metricsCleanupInterval, deploymentFilter, eventFilter)
 
 	nozzle := firehosenozzle.New(
@@ -295,21 +299,21 @@ func main() {
 		*dopplerMaxRetryCount,
 		authTokenRefresher,
 		metricsStore,
+		appmap,
+		amutex,
 	)
 	go func() {
 		log.Fatal(nozzle.Start())
 	}()
 
-	appmap := make(map[string]cfinstanceinfoapi.AppInfo)
         log.Infoln("generating first app map")
-        cfinstanceinfoapi.GenAppMap(*appInfoApiUrl, appmap)
-
-        go cfinstanceinfoapi.UpdateAppMap(*appInfoApiUrl, appmap)
+        cfinstanceinfoapi.GenAppMap(*appInfoApiUrl, appmap, amutex)
+        go cfinstanceinfoapi.UpdateAppMap(*appInfoApiUrl, appmap, amutex)
 
 	internalMetricsCollector := collectors.NewInternalMetricsCollector(*metricsNamespace, *metricsEnvironment, metricsStore)
 	prometheus.MustRegister(internalMetricsCollector)
 
-	containerMetricsCollector := collectors.NewContainerMetricsCollector(*metricsNamespace, *metricsEnvironment, metricsStore, appmap)
+	containerMetricsCollector := collectors.NewContainerMetricsCollector(*metricsNamespace, *metricsEnvironment, metricsStore, appmap, amutex)
 	prometheus.MustRegister(containerMetricsCollector)
 
 	counterEventsCollector := collectors.NewCounterEventsCollector(*metricsNamespace, *metricsEnvironment, metricsStore)

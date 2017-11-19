@@ -3,6 +3,7 @@ package firehosenozzle
 import (
 	"crypto/tls"
 	"time"
+	"sync"
 
 	"github.com/cloudfoundry/noaa/consumer"
 	noaerrors "github.com/cloudfoundry/noaa/errors"
@@ -11,6 +12,7 @@ import (
 	"github.com/prometheus/common/log"
 
 	"github.com/mjseid/firehose_exporter/metrics"
+	"github.com/mjseid/firehose_exporter/cfinstanceinfoapi"
 )
 
 type FirehoseNozzle struct {
@@ -26,6 +28,8 @@ type FirehoseNozzle struct {
 	errs               <-chan error
 	messages           <-chan *events.Envelope
 	consumer           *consumer.Consumer
+	appinfo            map[string]cfinstanceinfoapi.AppInfo
+	amutex		   *sync.RWMutex
 }
 
 func New(
@@ -38,6 +42,8 @@ func New(
 	maxRetryCount int,
 	authTokenRefresher consumer.TokenRefresher,
 	metricsStore *metrics.Store,
+	appinfo map[string]cfinstanceinfoapi.AppInfo,
+	amutex *sync.RWMutex,
 ) *FirehoseNozzle {
 	return &FirehoseNozzle{
 		url:                url,
@@ -51,6 +57,8 @@ func New(
 		metricsStore:       metricsStore,
 		errs:               make(<-chan error),
 		messages:           make(<-chan *events.Envelope),
+		appinfo:	    appinfo,
+		amutex:		    amutex,
 	}
 }
 
@@ -90,7 +98,9 @@ func (n *FirehoseNozzle) parseEnvelopes() error {
 		select {
 		case envelope := <-n.messages:
 			n.handleMessage(envelope)
+			n.amutex.RLock()
 			n.metricsStore.AddMetric(envelope)
+			n.amutex.RUnlock()
 		case err := <-n.errs:
 			retryError := n.handleError(err)
 			if !retryError {
